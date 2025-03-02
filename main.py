@@ -362,6 +362,11 @@ def generate_events(courses, semester_start_date):
     # 格式: (课程名, 教师, 周次, 星期, 时间段)
     added_events = set()
     
+    # 地址映射字典 - 用于扩展简短地点为完整地址
+    location_map = {
+        "金海": "上海杉达学院-金海校区"
+    }
+    
     for course in courses:
         for time_location in course["time_locations"]:
             weekday_offset = weekday_map[time_location["weekday"]]
@@ -409,7 +414,21 @@ def generate_events(courses, semester_start_date):
                     event.name = f"{course['name']}（{time_location['teacher']}）"
                     event.begin = start_datetime
                     event.end = end_datetime
-                    event.location = time_location["location"]
+                    
+                    # 处理地点信息 - 扩展为完整地址
+                    original_location = time_location["location"]
+                    full_location = original_location
+                    
+                    # 检查地点是否含有地址映射中的关键词
+                    for key, address in location_map.items():
+                        if key in original_location:
+                            # 提取教室号码部分
+                            room_number = original_location.replace(key, "").strip()
+                            # 组合完整地址和教室号码
+                            full_location = f"{address} {room_number}"
+                            break
+                    
+                    event.location = full_location
                     
                     # 添加描述 - 只包含关键信息
                     description = [
