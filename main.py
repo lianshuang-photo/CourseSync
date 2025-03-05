@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timedelta
 import pytz
 from ics import Calendar, Event
+from ics.alarm import DisplayAlarm
 
 # 节次时间映射表 - 使用阿拉伯数字作为键
 # 更新为用户提供的时间段
@@ -367,6 +368,41 @@ def generate_events(courses, semester_start_date):
         "金海": "上海杉达学院-金海校区"
     }
     
+    # 创建一个字典来存储每天的课程时间段
+    # 格式: {(周数, 星期): {时间段}}
+    daily_slots = {}
+    
+    # 第一遍遍历：收集每天的课程时间段
+    for course in courses:
+        for time_location in course["time_locations"]:
+            weekday_offset = weekday_map[time_location["weekday"]]
+            
+            # 获取课程的时间段
+            start_hour, start_minute = map(int, time_location["start_time"].split(':'))
+            
+            # 判断属于哪个时间段（1-2节，3-4节，5-6节，7-8节，9-12节）
+            time_slot = None
+            if start_hour == 8:  # 1-2节
+                time_slot = "1-2"
+            elif start_hour == 9:  # 3-4节
+                time_slot = "3-4"
+            elif start_hour == 12:  # 5-6节
+                time_slot = "5-6"
+            elif start_hour == 14:  # 7-8节
+                time_slot = "7-8"
+            elif start_hour == 17:  # 9-12节
+                time_slot = "9-12"
+            
+            # 处理每个周次范围
+            for week_range in time_location["weeks"]:
+                start_week, end_week = week_range
+                for week_num in range(start_week, end_week + 1):
+                    day_key = (week_num, weekday_offset)
+                    if day_key not in daily_slots:
+                        daily_slots[day_key] = set()
+                    daily_slots[day_key].add(time_slot)
+    
+    # 第二遍遍历：生成事件并根据规则添加提醒
     for course in courses:
         for time_location in course["time_locations"]:
             weekday_offset = weekday_map[time_location["weekday"]]
@@ -414,6 +450,35 @@ def generate_events(courses, semester_start_date):
                     event.name = f"{course['name']}（{time_location['teacher']}）"
                     event.begin = start_datetime
                     event.end = end_datetime
+                    
+                    # 判断是否需要添加提醒
+                    day_key = (week_num, weekday_offset)
+                    day_slots = daily_slots.get(day_key, set())
+                    
+                    # 获取当前课程的时间段
+                    current_slot = None
+                    if start_hour == 8:
+                        current_slot = "1-2"
+                    elif start_hour == 9:
+                        current_slot = "3-4"
+                    elif start_hour == 12:
+                        current_slot = "5-6"
+                    elif start_hour == 14:
+                        current_slot = "7-8"
+                    elif start_hour == 17:
+                        current_slot = "9-12"
+                    
+                    # 判断是否需要添加提醒
+                    need_alarm = True
+                    if current_slot == "3-4" and "1-2" in day_slots:
+                        need_alarm = False
+                    elif current_slot == "7-8" and "5-6" in day_slots:
+                        need_alarm = False
+                    
+                    # 如果需要提醒，添加VALARM组件
+                    if need_alarm:
+                        alarm = DisplayAlarm(trigger=timedelta(minutes=-20))
+                        event.alarms.append(alarm)
                     
                     # 处理地点信息 - 扩展为完整地址
                     original_location = time_location["location"]
