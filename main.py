@@ -240,47 +240,49 @@ def parse_course_info(text):
             "time_locations": []
         }
         
-        # 解析时间地点信息
-        time_loc_pattern = r'((?:\d+~\d+|\d+)周)\s+(星期[一二三四五六日])\s+(.*?节)\s+(金海\s*\w+)\s+([^;\n]+)'
+        # 解析时间地点信息 - 支持两种时间格式
+        time_loc_pattern = r'((?:\d+~\d+|\d+)周)\s+(星期[一二三四五六日])\s+((?:第.*?节~.*?节)|(?:\d{2}:\d{2}~\d{2}:\d{2}))\s+(金海\s*\w+)\s+([^;\n]+)'
         for match in re.finditer(time_loc_pattern, block):
             weeks_str = match.group(1)
             weekday = match.group(2)
-            time_slots_str = match.group(3)
+            time_str = match.group(3)
             location = match.group(4).replace(' ', '')
             teacher = match.group(5).strip().rstrip(';')
             
-            # 解析周次和节次
+            # 解析周次
             weeks = parse_weeks(weeks_str)
-            time_slots = parse_time_slots(time_slots_str)
             
-            if time_slots:
-                first_slot = time_slots[0][0]
-                last_slot = time_slots[-1][1]
-                
-                # 尝试使用合并节次的时间映射
-                slot_key = f"{first_slot}-{last_slot}"
-                
-                if slot_key in merged_time_map:
-                    # 使用合并节次的时间
-                    start_time = merged_time_map[slot_key]["start"]
-                    end_time = merged_time_map[slot_key]["end"]
-                else:
-                    # 如果没有合并节次的映射，使用单节次时间
-                    start_time = class_time_map[first_slot]["start"]
-                    end_time = class_time_map[last_slot]["end"]
-                
-                time_location = {
-                    "weeks": weeks,
-                    "weekday": weekday,
-                    "time_slots": time_slots,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "time_str": f"{start_time}-{end_time}",
-                    "location": location,
-                    "teacher": teacher
-                }
-                
-                course["time_locations"].append(time_location)
+            # 判断时间格式并解析
+            if '第' in time_str:
+                # 传统节次格式
+                time_slots = parse_time_slots(time_str)
+                if time_slots:
+                    first_slot = time_slots[0][0]
+                    last_slot = time_slots[-1][1]
+                    slot_key = f"{first_slot}-{last_slot}"
+                    if slot_key in merged_time_map:
+                        start_time = merged_time_map[slot_key]["start"]
+                        end_time = merged_time_map[slot_key]["end"]
+                    else:
+                        start_time = class_time_map[first_slot]["start"]
+                        end_time = class_time_map[last_slot]["end"]
+            else:
+                # 直接时间格式 (如 17:40~19:55)
+                start_time, end_time = time_str.split('~')
+                time_slots = None
+            
+            time_location = {
+                "weeks": weeks,
+                "weekday": weekday,
+                "time_slots": time_slots,
+                "start_time": start_time,
+                "end_time": end_time,
+                "time_str": f"{start_time}-{end_time}",
+                "location": location,
+                "teacher": teacher
+            }
+            
+            course["time_locations"].append(time_location)
         
         # 只添加有时间地点信息的课程
         if course["time_locations"]:
@@ -337,6 +339,51 @@ def get_time_range(time_slots):
         "start": class_time_map[first_slot]["start"], 
         "end": class_time_map[last_slot]["end"]
     }
+
+def parse_classroom_location(location):
+    """
+    解析教室位置信息，提取楼号、楼层和教室号
+    
+    Args:
+        location: 原始地点字符串，如"金海9408"
+        
+    Returns:
+        str: 格式化后的地址
+    """
+    # 移除"金海"和空格
+    location = location.replace("金海", "").strip()
+    
+    # 如果长度不是4或5，返回原始地址
+    if len(location) not in [4, 5]:
+        return f"上海杉达学院金海校区 {location}"
+    
+    try:
+        if len(location) == 4:
+            building = location[0]     # 楼号
+            floor = location[1]        # 楼层
+            room = location[2:]        # 教室号
+        else:  # 长度为5，处理如12510这样的情况
+            building = location[0:2]   # 楼号（如12）
+            floor = location[2]        # 楼层
+            room = location[3:]        # 教室号
+        
+        # 楼栋名称映射
+        building_names = {
+            "9": "胜祥商学院楼",
+            "8": "科学实验楼",
+            "12": "综合实验实训大楼"
+        }
+        
+        # 处理1-6号楼
+        if building in ["1", "2", "3", "4", "5", "6"]:
+            return f"上海杉达学院金海校区教学楼{building}号楼 {floor}楼{room}教室"
+        # 处理其他特殊命名的楼
+        elif building in building_names:
+            return f"上海杉达学院金海校区{building_names[building]} {floor}楼{room}教室"
+        else:
+            return f"上海杉达学院金海校区{building}号楼 {floor}楼{room}教室"
+    except:
+        return f"上海杉达学院金海校区 {location}"
 
 def generate_events(courses, semester_start_date):
     """
@@ -480,19 +527,9 @@ def generate_events(courses, semester_start_date):
                         alarm = DisplayAlarm(trigger=timedelta(minutes=-20))
                         event.alarms.append(alarm)
                     
-                    # 处理地点信息 - 扩展为完整地址
+                    # 处理地点信息 - 解析教室号码
                     original_location = time_location["location"]
-                    full_location = original_location
-                    
-                    # 检查地点是否含有地址映射中的关键词
-                    for key, address in location_map.items():
-                        if key in original_location:
-                            # 提取教室号码部分
-                            room_number = original_location.replace(key, "").strip()
-                            # 组合完整地址和教室号码
-                            full_location = f"{address} {room_number}"
-                            break
-                    
+                    full_location = parse_classroom_location(original_location)
                     event.location = full_location
                     
                     # 添加描述 - 只包含关键信息
